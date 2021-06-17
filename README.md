@@ -1,12 +1,8 @@
 # FTANet-melodic
-This repository contains the offical implementation for the paper accepted by ICASSP 2021 《Frequency-Temporal Attention Network for Singing Melody Extraction》.
+This repository contains an adaptation of the following work presented in ICASSP 2021:《Frequency-Temporal Attention Network for Singing Melody Extraction》. Our use case is vocal pitch extraction for Indian Art Music.
 
-The codes are implemented by Keras 2.
+The model is implemented using Keras 2.
 
-# Update 
+# Paper publication of the work
 
-### 2021 May 24
-
-1. We add a pytorch implementation version in the network directory. Special thanks to Dr. Ke Chen.
-
-2. Please use 8K sampling rate, 768 window-size and 80 hop-size, when computing CFP. Other settings may cannot reproduce the results of the paper.
+Shuai Yu et al. “Frequency-Temporal Attention Network for Singing MelodyExtraction”. **In:** Proceedings of the IEEE International Conference on Acoustics, Speech and Signal Processing (2021), pp. 251–255. doi:10.1109/icassp39728.2021.9413444
