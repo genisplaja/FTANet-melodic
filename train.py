@@ -1,70 +1,102 @@
 import os
+import csv
+import random
+import pickle
 import argparse
 import time
+from tqdm import tqdm
 import warnings
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import backend as K
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.models import load_model, save_model
 from tensorflow.keras.metrics import categorical_accuracy
 
 from constant import *
 from generator import create_data_generator
-from loader import load_data, load_data_for_test #TODO
+from loader import load_data, load_data_for_test  # TODO
 from evaluator import evaluate
 
 from network.ftanet import create_model
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # 指定输出的模型的路径
-parser = argparse.ArgumentParser()
-parser.add_argument("model_file", type=str, help="model file")
-checkpoint_model_file = parser.parse_args().model_file
+#parser = argparse.ArgumentParser()
+#parser.add_argument("model_file", type=str, help="model file")
+#checkpoint_model_file = parser.parse_args().model_file
+fp = '/mnt/sda1/genis/carnatic_melody_synthesis/resources/Saraga-Synth-Dataset/experiments'
+checkpoint_best_OA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/best_OA'
+checkpoint_best_loss = '/mnt/sda1/genis/FTANet-melodic/model/baseline/best_loss'
+checkpoint_best_RPA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/best_RPA'
+
+list_folder = '/mnt/sda1/genis/FTANet-melodic/file_lists'
 
 
-# log_file_name = 'log/log-train-{}.txt'.format(time.strftime("%Y%m%d-%H%M%S"))
-log_file_name = checkpoint_model_file.replace('model/', 'log/').replace('.h5', '.log')
-log_file = open(log_file_name, 'wb')
+#log_file_name = 'log/log-train-{}.txt'.format(time.strftime("%Y%m%d-%H%M%S"))
+#log_file_name = checkpoint_model_file.replace('model/', 'log/').replace('.h5', '.log')
+#log_file = open(log_file_name, 'wb')
 
-# 日志函数
-def log(message):
-    message_bytes = '{}\n'.format(message).encode(encoding='utf-8')
-    log_file.write(message_bytes)
-    print(message)
+non_silent_tracks = []
+print(len(os.listdir(os.path.join(fp, 'annotations', 'melody'))))
+for track_path in tqdm(os.listdir(os.path.join(fp, 'annotations', 'melody'))):
+    with open(os.path.join(fp, 'annotations', 'melody', track_path)) as fhandle:
+        reader = csv.reader(fhandle, delimiter=',')
+        for row in reader:
+            pitch_value = float(row[1].replace(' ', ''))
+            if float(pitch_value) > 0.01:
+                non_silent_tracks.append(track_path.split('_')[-1].replace('.csv', ''))
+                break
 
+train_portion = int(len(non_silent_tracks) * 0.65)
+train_tracks = non_silent_tracks[:train_portion]
+val_tracks = non_silent_tracks[train_portion:]
+train_ids = random.sample(train_tracks, 950)
+train_ids = [x for x in train_ids if '9999999' not in x]
+train_ids = [x for x in train_ids if 'xxxxx' not in x]
+val_ids = random.sample(val_tracks, 25) + random.sample(train_tracks, 25)
+val_ids = [x for x in val_ids if '9999999' not in x]
+val_ids = [x for x in val_ids if 'xxxxx' not in x]
 
-## 文件列表
-train_list_file = '/data1/project/MCDNN/data/train_npy.txt'
-valid_list_file = '/data1/project/MCDNN/data/valid_npy.txt'
-
+with open(list_folder + '/train.pkl', 'wb') as f:
+    pickle.dump(train_ids, f)
+    
+with open(list_folder + '/eval.pkl', 'wb') as f:
+    pickle.dump(val_ids, f)
 
 ##--- 加载数据 ---##
 # x: (n, freq_bins, time_frames, 3) extract from audio by cfp_process
 # y: (n, freq_bins+1, time_frames) from ground-truth
-train_x, train_y, train_num = load_data(train_list_file, seg_len=SEG_LEN)
-log('Loaded {} segments from {}.'.format(train_num, train_list_file))
-valid_x, valid_y = load_data_for_test(valid_list_file, seg_len=SEG_LEN)
-log('Loaded features for {} files from {}.'.format(len(valid_y), valid_list_file))
+train_x, train_y, train_num = load_data(
+    data_file='./',
+    track_list=train_ids,
+    seg_len=SEG_LEN
+)
+valid_x, valid_y = load_data_for_test(
+    data_file='./',
+    track_list=val_ids,
+    seg_len=SEG_LEN
+)
 
 ##--- Data Generator ---##
-log('\nCreating generators...')
+print('\nCreating generators...')
 train_generator = create_data_generator(train_x, train_y, batch_size=BATCH_SIZE)
 
 ##--- 网络 ---##
-log('\nCreating model...')
+print('\nCreating model...')
 
 model = create_model(input_shape=IN_SHAPE)
 model.compile(loss='binary_crossentropy', optimizer=(Adam(lr=LR)))
 # model.summary()
 
 ##--- 开始训练 ---##
-log('\nTaining...')
-log('params={}'.format(model.count_params()))
+print('\nTaining...')
+print('params={}'.format(model.count_params()))
 
 epoch, iteration = 0, 0
-best_OA, best_epoch = 0, 0
+best_OA, best_epoch, best_RPA, best_loss = 0, 0, 0, 10000
 mean_loss = 0
 time_start = time.time()
 while epoch < EPOCHS:
@@ -78,27 +110,50 @@ while epoch < EPOCHS:
     mean_loss += loss
     # 每个epoch输出信息
     if iteration % (train_num//BATCH_SIZE) == 0:
-        ## train meassage
+        # train meassage
         epoch += 1
-        traintime  = time.time() - time_start
+        traintime = time.time() - time_start
         mean_loss /= train_num//BATCH_SIZE
         print('', end='\r')
-        log('Epoch {}/{} - {:.1f}s - loss {:.4f}'.format(epoch, EPOCHS, traintime, mean_loss))
-        ## valid results
+        print('Epoch {}/{} - {:.1f}s - loss {:.4f}'.format(epoch, EPOCHS, traintime, mean_loss))
+        # valid results
         avg_eval_arr = evaluate(model, valid_x, valid_y, BATCH_SIZE)
         # save to model
         if avg_eval_arr[-1] > best_OA:
             best_OA = avg_eval_arr[-1]
             best_epoch = epoch
-            model.save_weights(checkpoint_model_file)
-            log('Saved to ' + checkpoint_model_file)
-        log('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}% BestOA {:.2f}%'.format(
+            save_model(
+                model=model,
+                filepath=checkpoint_best_OA,
+                overwrite=True,
+                include_optimizer=True
+            )
+            print('Saved to ' + checkpoint_best_OA)
+        if mean_loss <= best_loss:
+            best_loss = mean_loss
+            save_model(
+                model=model,
+                filepath=checkpoint_best_loss,
+                overwrite=True,
+                include_optimizer=True
+            )
+            print('Saved to ' + checkpoint_best_loss)
+        if avg_eval_arr[2] > best_RPA:
+            best_RPA = avg_eval_arr[2]
+            save_model(
+                model=model,
+                filepath=checkpoint_best_RPA,
+                overwrite=True,
+                include_optimizer=True
+            )
+            print('Saved to ' + checkpoint_best_RPA)
+        print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}% BestOA {:.2f}%'.format(
             avg_eval_arr[0], avg_eval_arr[1], avg_eval_arr[2], avg_eval_arr[3], avg_eval_arr[4], best_OA))
         # early stopping
         if epoch - best_epoch >= PATIENCE:
-            log('Early stopping with best OA {:.2f}%'.format(best_OA))
+            print('Early stopping with best OA {:.2f}%'.format(best_OA))
             break
-        ## initialization
+            
+        # initialization
         mean_loss = 0
         time_start = time.time()
-

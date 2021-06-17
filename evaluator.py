@@ -1,9 +1,20 @@
 import numpy as np
 import numpy
+from tqdm import tqdm
 from numpy.core.fromnumeric import std
 import mir_eval
+from cfp import cfp_process
+from tensorflow import keras
 
+from constant import *
+from loader import *
+from generator import create_data_generator
+from loader import load_data, load_data_for_test  # TODO
+
+from network.ftanet import create_model
 from loader import get_CenFreq
+
+DATA_PATH = '/mnt/sda1/genis/carnatic_melody_synthesis/resources/Saraga-Synth-Dataset/experiments'
 
 
 def std_normalize(data): 
@@ -55,8 +66,8 @@ def melody_eval(ref, est):
 
 def iseg(data):
     # data: (batch_size, freq_bins, seg_len)
-    new_length = data.shape[0] * data.shape[-1] # T = batch_size * seg_len
-    new_data = np.zeros((data.shape[1], new_length)) # (freq_bins, T)
+    new_length = data.shape[0] * data.shape[-1]  # T = batch_size * seg_len
+    new_data = np.zeros((data.shape[1], new_length))  # (freq_bins, T)
     for i in range(len(data)):
         new_data[:, i * data.shape[-1] : (i + 1) * data.shape[-1]] = data[i]
     return new_data
@@ -76,7 +87,7 @@ def evaluate(model, x_list, y_list, batch_size):
         for j in range(num):
             # x: (batch_size, freq_bins, seg_len)
             if j == num - 1:
-                X = x[j*batch_size : ]
+                X = x[j*batch_size:]
                 length = x.shape[0]-j*batch_size
             else:
                 X = x[j*batch_size : (j+1)*batch_size]
@@ -97,9 +108,12 @@ def evaluate(model, x_list, y_list, batch_size):
         
         # trnasform to f0ref
         CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)
+        #CenFreq = get_CenFreq(StartFreq=20, StopFreq=2048, NumPerOct=60)
+        #CenFreq = get_CenFreq(StartFreq=81, StopFreq=600, NumPerOct=111)
+        #CenFreq = get_CenFreq(StartFreq=81, StopFreq=600, NumPerOct=190)
         est_arr = est(preds, CenFreq, time_arr)
 
-        # evaluate
+        # evaluates
         eval_arr = melody_eval(ref_arr, est_arr)
         avg_eval_arr += eval_arr
     
@@ -108,8 +122,38 @@ def evaluate(model, x_list, y_list, batch_size):
     return avg_eval_arr
 
 
+def evaluate_model():
+    print('Loading model...')
+    model = keras.models.load_model('/mnt/sda1/genis/FTANet-melodic/model/baseline/best_OA')
+    print('Model loaded!')
+    
+    xlist = []
+    ylist = []
+    for chunk_id in tqdm(['1000']):
+        
+        ## Load cfp features (3, 320, T)
+        # feature = np.load(data_folder + 'cfp/' + fname + '.npy')
+        wav_file = DATA_PATH + '/audio/synth_mix_' + chunk_id + '.wav'
+        feature, _, time_arr = cfp_process(wav_file, sr=8000, hop=80)
+        print('feature', np.shape(feature))
+    
+        ## Load f0 frequency
+        # pitch = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
+        ref_arr = csv2ref(DATA_PATH + '/annotations/melody/synth_mix_' + chunk_id + '.csv')
+        times, pitch = resample_melody(ref_arr, np.shape(feature)[-1])
+        ref_arr_res = np.concatenate((times[:, None], pitch[:, None]), axis=1)
+        print('pitch', np.shape(ref_arr_res))
+    
+        data = batchize_test(feature, size=128)
+        xlist.append(data)
+        ylist.append(ref_arr_res[:, :])
+
+    hola = evaluate(model, xlist, ylist, batch_size=16)
+    print(hola)
+
 # Just for test
 if __name__ == '__main__':
+    '''
     import os
     from tensorflow.keras import backend as K
     from tensorflow.keras.models import load_model
@@ -150,7 +194,7 @@ if __name__ == '__main__':
         for j in range(num):
             # x: (batch_size, freq_bins, seg_len)
             if j == num - 1:
-                X = x[j*batch_size : ]
+                X = x[j*batch_size:]
                 batch_x = x_temp[idx_st+j*batch_size : idx_st+x.shape[0]]
                 batch_y = y_temp[idx_st+j*batch_size : idx_st+x.shape[0]]
                 length = x.shape[0]-j*batch_size
@@ -171,18 +215,6 @@ if __name__ == '__main__':
         preds = iseg(preds_raw)
         print(preds.shape, end='; ')
 
-
-        # train labels
-        labels_raw = y_temp[idx_st : idx_st+x.shape[0]]
-        idx_st += x.shape[0]
-
-        print('labels', np.shape(labels_raw), end='; ')
-        labels = iseg(np.array(labels_raw))
-        print(labels.shape, end=' ')
-
-        # print('acc', K.eval(K.mean(acc(np.array(labels_raw), preds_raw))), end='; ')
-
-
         # ground-truth
         ref_arr = y
         time_arr = y[:, 0]
@@ -191,24 +223,11 @@ if __name__ == '__main__':
         # trnasform to f0ref
         CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)
         est_arr_pred = est(preds, CenFreq, time_arr)
-        est_arr_label = est(labels, CenFreq, time_arr)
-
-        # cnt = 0
-        # for i in range(min(np.shape(est_arr)[0], np.shape(ref_arr)[0])):
-        #     # print(i, est_arr[i][1], ref_arr[i][1])
-        #     if abs(est_arr[i][1] - ref_arr[i][1])>1:
-        #         cnt += 1
-        #         # print(i, est_arr[i][1], ref_arr[i][1])
-        # print(cnt)
 
         # evaluate
         avg_eval_arr_rp += melody_eval(ref_arr, est_arr_pred)
-        avg_eval_arr_rl += melody_eval(ref_arr, est_arr_label)
-        avg_eval_arr_lp += melody_eval(est_arr_label, est_arr_pred)
     
     avg_eval_arr_rp /= len(x_list)
-    avg_eval_arr_rl /= len(x_list)
-    avg_eval_arr_lp /= len(x_list)
     print(avg_eval_arr_rp)
-    print(avg_eval_arr_rl)
-    print(avg_eval_arr_lp)
+    '''
+    evaluate_model()
