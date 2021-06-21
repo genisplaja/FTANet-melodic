@@ -1,5 +1,9 @@
+import re
 import numpy as np
 import numpy
+import glob
+import random
+import pickle
 from tqdm import tqdm
 from numpy.core.fromnumeric import std
 import mir_eval
@@ -8,6 +12,7 @@ from tensorflow import keras
 
 from constant import *
 from loader import *
+import essentia.standard as estd
 from generator import create_data_generator
 from loader import load_data, load_data_for_test  # TODO
 
@@ -15,6 +20,14 @@ from network.ftanet import create_model
 from loader import get_CenFreq
 
 DATA_PATH = '/mnt/sda1/genis/carnatic_melody_synthesis/resources/Saraga-Synth-Dataset/experiments'
+
+
+def atoi(text):
+    return int(text) if text.isdigit() else text
+
+
+def natural_keys(text):
+    return [atoi(c) for c in re.split(r'(\d+)', text)]
 
 
 def std_normalize(data): 
@@ -73,7 +86,8 @@ def iseg(data):
     return new_data
 
 
-def evaluate(model, x_list, y_list, batch_size):
+def evaluate(model, x_list, y_list, batch_size, filename=None):
+    list_to_save = []
     avg_eval_arr = np.array([0, 0, 0, 0, 0], dtype='float64')
     for i in range(len(x_list)):
         x = x_list[i]
@@ -115,21 +129,101 @@ def evaluate(model, x_list, y_list, batch_size):
 
         # evaluates
         eval_arr = melody_eval(ref_arr, est_arr)
+        list_to_save.append(eval_arr)
         avg_eval_arr += eval_arr
     
     avg_eval_arr /= len(x_list)
     # VR, VFA, RPA, RCA, OA
+    if filename:
+        with open('/mnt/sda1/genis/FTANet-melodic/file_lists/' + filename, 'wb') as f:
+            pickle.dump(list_to_save, f)
     return avg_eval_arr
+
+
+def get_est_arr(model, x_list, y_list, batch_size):
+    for i in range(len(x_list)):
+        x = x_list[i]
+        y = y_list[i]
+        
+        # predict and concat
+        num = x.shape[0] // batch_size
+        if x.shape[0] % batch_size != 0:
+            num += 1
+        preds = []
+        for j in range(num):
+            # x: (batch_size, freq_bins, seg_len)
+            if j == num - 1:
+                X = x[j * batch_size:]
+                length = x.shape[0] - j * batch_size
+            else:
+                X = x[j * batch_size: (j + 1) * batch_size]
+                length = batch_size
+            
+            # for k in range(length): # normalization
+            #     X[k] = std_normalize(X[k])
+            prediction = model.predict(X, length)
+            preds.append(prediction)
+        
+        # (num*bs, freq_bins, seg_len) to (freq_bins, T)
+        preds = np.concatenate(preds, axis=0)
+        preds = iseg(preds)
+        
+        # ground-truth
+        
+        # trnasform to f0ref
+        CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)
+        # CenFreq = get_CenFreq(StartFreq=20, StopFreq=2048, NumPerOct=60)
+        # CenFreq = get_CenFreq(StartFreq=81, StopFreq=600, NumPerOct=111)
+        # CenFreq = get_CenFreq(StartFreq=81, StopFreq=600, NumPerOct=190)
+        est_arr = est(preds, CenFreq, y)
+        
+    # VR, VFA, RPA, RCA, OA
+    return est_arr
+
+
+def get_pitch_track(filename):
+    print('Loading model...')
+    model = create_model(input_shape=IN_SHAPE)
+    model.load_weights(
+        filepath='/mnt/sda1/genis/FTANet-melodic/model/baseline/OA/best_OA'
+    ).expect_partial()
+    print('Model loaded!')
+    
+    xlist = []
+    timestamps = []
+    # feature = np.load(data_folder + 'cfp/' + fname + '.npy')
+    feature, _, time_arr = cfp_process(filename, sr=8000, hop=80)
+    print('feature', np.shape(feature))
+    
+    data = batchize_test(feature, size=128)
+    xlist.append(data)
+    timestamps.append(time_arr)
+    
+    print(np.shape(data), np.shape(time_arr))
+    
+    estimation = get_est_arr(model, xlist, timestamps, batch_size=16)
+
+    save_pitch_track_to_dataset(
+        '/mnt/sda1/genis/FTANet-melodic/data/experiment.txt',
+        estimation[:, 0],
+        estimation[:, 1]
+    )
 
 
 def evaluate_model():
     print('Loading model...')
-    model = keras.models.load_model('/mnt/sda1/genis/FTANet-melodic/model/baseline/best_OA')
+    model_baseline = create_model(input_shape=IN_SHAPE)
+    model_baseline.load_weights('/mnt/sda1/genis/FTANet-melodic/model/ftanet.h5')
+    model = create_model(input_shape=IN_SHAPE)
+    model.load_weights(
+        filepath='/mnt/sda1/genis/FTANet-melodic/model/baseline/OA/best_OA'
+        ).expect_partial()
     print('Model loaded!')
     
     xlist = []
     ylist = []
-    for chunk_id in tqdm(['1000']):
+    #timestamps = []
+    for chunk_id in tqdm(['2500']):
         
         ## Load cfp features (3, 320, T)
         # feature = np.load(data_folder + 'cfp/' + fname + '.npy')
@@ -147,87 +241,97 @@ def evaluate_model():
         data = batchize_test(feature, size=128)
         xlist.append(data)
         ylist.append(ref_arr_res[:, :])
+        #timestamps.append(time_arr)
 
     hola = evaluate(model, xlist, ylist, batch_size=16)
-    print(hola)
+    hola2 = evaluate(model_baseline, xlist, ylist, batch_size=16)
+    #estimation = get_est_arr(model, xlist, timestamps, batch_size=16)
+    print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+        hola[0], hola[1], hola[2], hola[3], hola[4]))
+    print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+        hola2[0], hola2[1], hola2[2], hola2[3], hola2[4]))
+    
+    #save_pitch_track_to_dataset(
+    #    '/mnt/sda1/genis/FTANet-melodic/data/experiment.txt',
+    #    estimation[:, 0],
+    #    estimation[:, 1]
+    #)
+    
+    
+def test_model():
+    print('Loading model...')
+    #model_baseline = create_model(input_shape=IN_SHAPE)
+    #model_baseline.load_weights('/mnt/sda1/genis/FTANet-melodic/model/ftanet.h5')
+    model = create_model(input_shape=IN_SHAPE)
+    model.load_weights(
+        filepath='/mnt/sda1/genis/FTANet-melodic/model/baseline/OA/best_OA'
+    ).expect_partial()
+    print('Model loaded!')
+    
+    train_file = open('/mnt/sda1/genis/FTANet-melodic/file_lists/train.pkl', 'rb')
+    train_list = pickle.load(train_file)
+
+    test_file = open('/mnt/sda1/genis/FTANet-melodic/file_lists/eval.pkl', 'rb')
+    test_list = pickle.load(test_file)
+    
+    data_files = glob.glob(DATA_PATH + '/audio/synth_mix*')
+    data_idx = [x.split('/')[-1].replace('synth_mix_', '').replace('.wav', '') for x in data_files]
+    
+    testing_files = [x for x in data_idx if x not in train_list]
+    testing_files = [x for x in testing_files if x not in test_list]
+    
+    #print(len(data_files))
+    #print(len(train_list))
+    #print(len(test_list))
+    #print(len(testing_files))
+
+    # Get unseen concerts during training
+    testing_files.sort(key=natural_keys)
+
+    xlist = []
+    ylist = []
+    #ylist_baseline = []
+    # timestamps = []
+    for chunk_id in tqdm(random.sample(testing_files[:500], 125)):
+        ## Load cfp features (3, 320, T)
+        # feature = np.load(data_folder + 'cfp/' + fname + '.npy')
+        wav_file = DATA_PATH + '/audio/synth_mix_' + chunk_id + '.wav'
+        feature, _, time_arr = cfp_process(wav_file, sr=8000, hop=80)
+        print('feature', np.shape(feature))
+    
+        ## Load f0 frequency
+        # pitch = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
+        ref_arr = csv2ref(DATA_PATH + '/annotations/melody/synth_mix_' + chunk_id + '.csv')
+        times, pitch = resample_melody(ref_arr, np.shape(feature)[-1])
+        ref_arr_res = np.concatenate((times[:, None], pitch[:, None]), axis=1)
+        print('pitch', np.shape(ref_arr_res))
+    
+        data = batchize_test(feature, size=128)
+        xlist.append(data)
+        ylist.append(ref_arr_res[:, :])
+        #ylist_baseline.append(ref_arr[:, :])
+        # timestamps.append(time_arr)
+
+    hola = evaluate(model, xlist, ylist, batch_size=16, filename='ours_test.pkl')
+    #hola2 = evaluate(model_baseline, xlist, ylist_baseline, batch_size=16, filename='baseline_2.pkl')
+    # estimation = get_est_arr(model, xlist, timestamps, batch_size=16)
+    print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+        hola[0], hola[1], hola[2], hola[3], hola[4]))
+    #print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+    #    hola2[0], hola2[1], hola2[2], hola2[3], hola2[4]))
+    
+
+def save_pitch_track_to_dataset(filename, est_time, est_freq):
+    # Write txt annotation to file
+    with open(filename, 'w') as f:
+        for i, j in zip(est_time, est_freq):
+            f.write("{}, {}\n".format(i, j))
+    print('Saved with exit to {}'.format(filename))
+
 
 # Just for test
 if __name__ == '__main__':
-    '''
-    import os
-    from tensorflow.keras import backend as K
-    from tensorflow.keras.models import load_model
-    from tensorflow.keras.metrics import categorical_accuracy
-    from loader import load_data_for_test, load_data
-    # from train import acc
-    os.environ["CUDA_VISIBLE_DEVICES"] = "4"
-
-    def acc(y_true, y_pred):
-        y_true = K.permute_dimensions(y_true, (0, 2, 1))
-        y_pred = K.permute_dimensions(y_pred, (0, 2, 1))
-        return categorical_accuracy(y_true, y_pred)
-        # return K.cast(K.equal(K.argmax(y_true, axis=-2), K.argmax(y_pred, axis=-2)), K.floatx())
-
-    avg_eval_arr_rp = np.array([0, 0, 0, 0, 0], dtype='float64')
-    avg_eval_arr_rl = np.array([0, 0, 0, 0, 0], dtype='float64')
-    avg_eval_arr_lp = np.array([0, 0, 0, 0, 0], dtype='float64')
-
-    # x_list, y_list = load_data_for_test('/data1/project/MCDNN/data/test_02_npy.txt') #Okay
-    # x_temp, y_temp, _ = load_data('/data1/project/MCDNN/data/test_02_npy.txt') #Okay
-    x_list, y_list = load_data_for_test('/data1/project/MCDNN/data/train_npy.txt')
-    x_temp, y_temp, _ = load_data('/data1/project/MCDNN/data/train_npy.txt')
-    model = load_model('model/msnet_0805.h5', compile=False)
-    batch_size = 8
-
-    # y_temp = np.array(y_temp)
-    idx_st = 0
-    print(len(x_list), len(y_list))
-    for i in range(len(x_list)):
-        x = x_list[i]
-        y = y_list[i]
-
-        # predict and concat
-        num = x.shape[0] // batch_size
-        if x.shape[0] % batch_size != 0:
-            num += 1
-        preds_raw = []
-        for j in range(num):
-            # x: (batch_size, freq_bins, seg_len)
-            if j == num - 1:
-                X = x[j*batch_size:]
-                batch_x = x_temp[idx_st+j*batch_size : idx_st+x.shape[0]]
-                batch_y = y_temp[idx_st+j*batch_size : idx_st+x.shape[0]]
-                length = x.shape[0]-j*batch_size
-            else:
-                X = x[j*batch_size : (j+1)*batch_size]
-                batch_x = x_temp[idx_st+j*batch_size : idx_st+(j+1)*batch_size]
-                batch_y = y_temp[idx_st+j*batch_size : idx_st+(j+1)*batch_size]
-                length = batch_size
-            # X_normed = std_normalize(X)
-            prediction = model.predict(X, length)
-            # print(np.shape(X), np.shape(batch_x))
-            print('train-test', K.eval(K.mean(K.equal(np.array(X), np.array(batch_x)))), end=' ')
-            print('acc', K.eval(K.mean(acc(np.array(batch_y), prediction))))
-            preds_raw.append(prediction)
-
-        preds_raw = np.concatenate(preds_raw, axis=0) ###
-        print('preds', preds_raw.shape, end='; ')
-        preds = iseg(preds_raw)
-        print(preds.shape, end='; ')
-
-        # ground-truth
-        ref_arr = y
-        time_arr = y[:, 0]
-        print('ground-truth', len(time_arr))
-        
-        # trnasform to f0ref
-        CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)
-        est_arr_pred = est(preds, CenFreq, time_arr)
-
-        # evaluate
-        avg_eval_arr_rp += melody_eval(ref_arr, est_arr_pred)
-    
-    avg_eval_arr_rp /= len(x_list)
-    print(avg_eval_arr_rp)
-    '''
-    evaluate_model()
+    test_model()
+    #get_pitch_track(
+    #    '/mnt/sda1/genis/carnatic_melody_synthesis/resources/saraga_subset/Gopi Gopala Bala.mp3.mp3'
+    #)

@@ -28,9 +28,9 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 #parser.add_argument("model_file", type=str, help="model file")
 #checkpoint_model_file = parser.parse_args().model_file
 fp = '/mnt/sda1/genis/carnatic_melody_synthesis/resources/Saraga-Synth-Dataset/experiments'
-checkpoint_best_OA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/best_OA'
-checkpoint_best_loss = '/mnt/sda1/genis/FTANet-melodic/model/baseline/best_loss'
-checkpoint_best_RPA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/best_RPA'
+checkpoint_best_OA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/OA/best_OA'
+checkpoint_best_loss = '/mnt/sda1/genis/FTANet-melodic/model/baseline/loss/best_loss'
+checkpoint_best_RPA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/RPA/best_RPA'
 
 list_folder = '/mnt/sda1/genis/FTANet-melodic/file_lists'
 
@@ -50,19 +50,22 @@ for track_path in tqdm(os.listdir(os.path.join(fp, 'annotations', 'melody'))):
                 non_silent_tracks.append(track_path.split('_')[-1].replace('.csv', ''))
                 break
 
+# Getting training split
 train_portion = int(len(non_silent_tracks) * 0.65)
 train_tracks = non_silent_tracks[:train_portion]
-val_tracks = non_silent_tracks[train_portion:]
-train_ids = random.sample(train_tracks, 950)
+train_ids = random.sample(train_tracks, 950)  # Get 950 samples
 train_ids = [x for x in train_ids if '9999999' not in x]
 train_ids = [x for x in train_ids if 'xxxxx' not in x]
+
+# Getting valid split
+val_tracks = non_silent_tracks[train_portion:]
 val_ids = random.sample(val_tracks, 25) + random.sample(train_tracks, 25)
 val_ids = [x for x in val_ids if '9999999' not in x]
 val_ids = [x for x in val_ids if 'xxxxx' not in x]
 
+# Store list of selected files to reproduce the results
 with open(list_folder + '/train.pkl', 'wb') as f:
     pickle.dump(train_ids, f)
-    
 with open(list_folder + '/eval.pkl', 'wb') as f:
     pickle.dump(val_ids, f)
 
@@ -118,33 +121,35 @@ while epoch < EPOCHS:
         print('Epoch {}/{} - {:.1f}s - loss {:.4f}'.format(epoch, EPOCHS, traintime, mean_loss))
         # valid results
         avg_eval_arr = evaluate(model, valid_x, valid_y, BATCH_SIZE)
-        # save to model
+        
+        # save best OA model
         if avg_eval_arr[-1] > best_OA:
             best_OA = avg_eval_arr[-1]
             best_epoch = epoch
-            save_model(
-                model=model,
+            model.save_weights(
                 filepath=checkpoint_best_OA,
                 overwrite=True,
-                include_optimizer=True
+                save_format='tf'
             )
             print('Saved to ' + checkpoint_best_OA)
+
+        # save best loss model
         if mean_loss <= best_loss:
             best_loss = mean_loss
-            save_model(
-                model=model,
+            model.save_weights(
                 filepath=checkpoint_best_loss,
                 overwrite=True,
-                include_optimizer=True
+                save_format='tf'
             )
             print('Saved to ' + checkpoint_best_loss)
+
+        # save best RPA model
         if avg_eval_arr[2] > best_RPA:
             best_RPA = avg_eval_arr[2]
-            save_model(
-                model=model,
+            model.save_weights(
                 filepath=checkpoint_best_RPA,
                 overwrite=True,
-                include_optimizer=True
+                save_format='tf'
             )
             print('Saved to ' + checkpoint_best_RPA)
         print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}% BestOA {:.2f}%'.format(
