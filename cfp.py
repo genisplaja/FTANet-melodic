@@ -248,10 +248,10 @@ def cfp_process(fpath, ypath=None, csv=False, sr=None, hop=256, model_type='voca
     print('CFP process in ' + str(fpath) + ' ... (It may take some times)')
     y, sr = load_audio(fpath, sr=sr)
     if 'vocal' in model_type:
-        Z, time, CenFreq, tfrL0, tfrLF, tfrLQ = feature_extraction(y, sr, Hop=hop, StartFreq=31.0, StopFreq=1250.0,
-                                                                  NumPerOct=60)
-        #Z, time, CenFreq, tfrL0, tfrLF, tfrLQ = feature_extraction(y, sr, Hop=hop, StartFreq=20.0, StopFreq=2048.0,
-        #                                                           NumPerOct=60)
+        #Z, time, CenFreq, tfrL0, tfrLF, tfrLQ = feature_extraction(y, sr, Hop=hop, StartFreq=31.0, StopFreq=1250.0,
+        #                                                        NumPerOct=60)
+        Z, time, CenFreq, tfrL0, tfrLF, tfrLQ = feature_extraction(y, sr, Hop=hop, StartFreq=100.0, StopFreq=600.0,
+                                                                   NumPerOct=124)
     if 'melody' in model_type:
         Z, time, CenFreq, tfrL0, tfrLF, tfrLQ = feature_extraction(y, sr, Hop=hop, StartFreq=20.0, StopFreq=2048.0,
                                                                    NumPerOct=60)

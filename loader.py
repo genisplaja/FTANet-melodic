@@ -12,7 +12,7 @@ from scipy import signal
 from cfp import cfp_process
 
 
-dataset_path = '/mnt/sda1/genis/carnatic_melody_synthesis/resources/Saraga-Synth-Dataset/experiments'
+dataset_path = '/mnt/sda1/genis/carnatic_melody_dataset/resources/Saraga-Synth-Dataset/'
 
 
 def get_CenFreq(StartFreq=80, StopFreq=1000, NumPerOct=48):
@@ -94,27 +94,26 @@ def batchize_test(data, size=430):
     return np.array(xlist)
     
 
-def load_data(data_file, track_list, seg_len=430):
+def load_data(track_list, seg_len=430):
     
     xlist = []
     ylist = []
-    for chunk_id in tqdm(track_list):
+    for wav_file in tqdm(track_list):
 
         ## Load cfp features (3, 320, T)
         #feature = np.load(data_folder + 'cfp/' + fname + '.npy')
-        wav_file = dataset_path + '/audio/synth_mix_' + chunk_id + '.wav'
-        feature, _, time_arr = cfp_process(wav_file, sr=8000, hop=80)
+        feature, CenFreq, time_arr = cfp_process(wav_file, sr=8000, hop=80)
         print('feature', np.shape(feature))
 
         ## Load f0 frequency
         #pitch = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
-        ref_arr = csv2ref(dataset_path + '/annotations/melody/synth_mix_' + chunk_id + '.csv')
+        ref_arr = csv2ref(wav_file.replace('.wav', '.csv').replace('audio', 'annotations/melody'))
         _, pitch_res = resample_melody(ref_arr, np.shape(feature)[-1])
         print('pitch', np.shape(pitch_res))
 
         ## Transfer to mapp, ping
-        #CenFreq = get_CenFreq(StartFreq=80, StopFreq=602, NumPerOct=220)
-        CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)  # (321) #参数是特征提取时就固定的
+        #CenFreq = get_CenFreq(StartFreq=31, StopFreq=720, NumPerOct=120)
+        #CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)  # (321) #参数是特征提取时就固定的
         mapping = seq2map(pitch_res, CenFreq)  # (321, T)
         # print('CenFreq', np.shape(CenFreq), 'mapping', np.shape(mapping))
         
@@ -129,21 +128,20 @@ def load_data(data_file, track_list, seg_len=430):
     return xlist, ylist, len(ylist)
 
 
-def load_data_for_test(data_file, track_list, seg_len=430):
+def load_data_for_test(track_list, seg_len=430):
 
     xlist = []
     ylist = []
-    for chunk_id in tqdm(track_list):
+    for wav_file in tqdm(track_list):
         
         ## Load cfp features (3, 320, T)
         # feature = np.load(data_folder + 'cfp/' + fname + '.npy')
-        wav_file = dataset_path + '/audio/synth_mix_' + chunk_id + '.wav'
         feature, _, time_arr = cfp_process(wav_file, sr=8000, hop=80)
         print('feature', np.shape(feature))
 
         ## Load f0 frequency
         # pitch = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
-        ref_arr = csv2ref(dataset_path + '/annotations/melody/synth_mix_' + chunk_id + '.csv')
+        ref_arr = csv2ref(wav_file.replace('.wav', '.csv').replace('audio', 'annotations/melody'))
         times, pitch = resample_melody(ref_arr, np.shape(feature)[-1])
         ref_arr_res = np.concatenate((times[:, None], pitch[:, None]), axis=1)
         print('pitch', np.shape(ref_arr_res))
@@ -214,6 +212,7 @@ def csv2ref(ypath):
 def resample_melody(pitch, new_len):
     times = pitch[:, 0]
     frequencies = pitch[:, 1]
+    #frequencies = [0 if p < 100 else p for p in frequencies]
     
     voicing = []
     for freq in frequencies:
@@ -231,62 +230,3 @@ def resample_melody(pitch, new_len):
     )
     
     return times_new, frequencies_resampled
-    
-
-
-
-
-# For Test
-if __name__ == '__main__':
-    # train_x, train_y, train_num = load_data('/data1/project/MCDNN/data/train_npy.txt')
-    # print(train_y[0].shape)
-    # for batch_y in train_y:
-    #     for i in range(batch_y.shape[1]):
-    #         y = np.argmax(batch_y[:, i])
-    #         if y!=0:
-    #             print(y)
-    def est(output, CenFreq, time_arr):
-        # output: (freq_bins, T)
-        CenFreq[0] = 0
-        est_time = time_arr
-        est_freq = np.argmax(output, axis=0)
-
-        for j in range(len(est_freq)):
-            est_freq[j] = CenFreq[int(est_freq[j])]
-
-        if len(est_freq) != len(est_time):
-            new_length = min(len(est_freq), len(est_time))
-            est_freq = est_freq[:new_length]
-            est_time = est_time[:new_length]
-
-        est_arr = np.concatenate((est_time[:, None], est_freq[:, None]), axis=1)
-
-        return est_arr
-
-    list_file = '/data1/project/MCDNN/data/test_02_npy.txt'
-    # _, ylist = load_data_for_test(list_file) # test this func #Okay
-    with open(list_file) as f:
-        feature_files = f.readlines()
-    data_folder = list_file[:-len(list_file.split('/')[-1])]
-    # print(datapath)
-
-    fname = feature_files[0]
-    fname = fname.replace('.npy', '').rstrip()
-    ref_arr = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
-    # ref_arr = ylist[0]
-
-    CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)
-    mapping = seq2map(ref_arr[:, 1], CenFreq) # (321, T)
-    est_arr = est(mapping, CenFreq, ref_arr[:, 0])
-
-    from evaluator import melody_eval
-    eval_arr = melody_eval(ref_arr, est_arr)
-    print(eval_arr)
-
-    cnt = 0
-    for i in range(min(np.shape(est_arr)[0], np.shape(ref_arr)[0])):
-        if est_arr[i][1] != ref_arr[i][1]:
-            cnt += 1
-    print(cnt)
-    
-

@@ -1,3 +1,4 @@
+import glob
 import os
 import csv
 import random
@@ -27,59 +28,55 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 #parser = argparse.ArgumentParser()
 #parser.add_argument("model_file", type=str, help="model file")
 #checkpoint_model_file = parser.parse_args().model_file
-fp = '/mnt/sda1/genis/carnatic_melody_synthesis/resources/Saraga-Synth-Dataset/experiments'
-checkpoint_best_OA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/OA/best_OA'
-checkpoint_best_loss = '/mnt/sda1/genis/FTANet-melodic/model/baseline/loss/best_loss'
-checkpoint_best_RPA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/RPA/best_RPA'
+fp = '/mnt/sda1/genis/carnatic_melody_dataset/resources/Saraga-Synth-Dataset/'
+checkpoint_best_OA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/OA'
 
 list_folder = '/mnt/sda1/genis/FTANet-melodic/file_lists'
-
 
 #log_file_name = 'log/log-train-{}.txt'.format(time.strftime("%Y%m%d-%H%M%S"))
 #log_file_name = checkpoint_model_file.replace('model/', 'log/').replace('.h5', '.log')
 #log_file = open(log_file_name, 'wb')
 
-non_silent_tracks = []
-print(len(os.listdir(os.path.join(fp, 'annotations', 'melody'))))
-for track_path in tqdm(os.listdir(os.path.join(fp, 'annotations', 'melody'))):
-    with open(os.path.join(fp, 'annotations', 'melody', track_path)) as fhandle:
-        reader = csv.reader(fhandle, delimiter=',')
-        for row in reader:
-            pitch_value = float(row[1].replace(' ', ''))
-            if float(pitch_value) > 0.01:
-                non_silent_tracks.append(track_path.split('_')[-1].replace('.csv', ''))
-                break
+dataset_filelist = glob.glob(fp + 'audio/*.wav')
+with open(fp + 'artists_to_track_mapping.pkl', 'rb') as map_file:
+    artists_to_track_mapping = pickle.load(map_file)
 
-# Getting training split
-train_portion = int(len(non_silent_tracks) * 0.65)
-train_tracks = non_silent_tracks[:train_portion]
-train_ids = random.sample(train_tracks, 950)  # Get 950 samples
-train_ids = [x for x in train_ids if '9999999' not in x]
-train_ids = [x for x in train_ids if 'xxxxx' not in x]
+artists_to_train = [
+    'Angarai V K Rajasimhan',
+    'KP Nandini',
+    'Vidya Subramanian',
+    'Kuldeep Pai',
+    'Salem Gayatri Venkatesan',
+    'Vasundara Rajagopal'
+]
 
-# Getting valid split
-val_tracks = non_silent_tracks[train_portion:]
-val_ids = random.sample(val_tracks, 25) + random.sample(train_tracks, 25)
-val_ids = [x for x in val_ids if '9999999' not in x]
-val_ids = [x for x in val_ids if 'xxxxx' not in x]
+# Get track to train
+tracks_to_train = []
+for artist in artists_to_train:
+    tracks_to_train = tracks_to_train + artists_to_track_mapping[artist]
+    
+print(len(tracks_to_train))
+    
+# Get filenames to train
+files_to_train = []
+for track in tracks_to_train:
+    files_to_train.append(fp + 'audio/' + track + '.wav')
+    
+training_files = random.sample(files_to_train, 700)
+validation_files = random.sample([x for x in files_to_train if x not in training_files], 25)
 
-# Store list of selected files to reproduce the results
-with open(list_folder + '/train.pkl', 'wb') as f:
-    pickle.dump(train_ids, f)
-with open(list_folder + '/eval.pkl', 'wb') as f:
-    pickle.dump(val_ids, f)
+print('Files to train: ', len(training_files))
+print('Files to validate: ', len(validation_files))
 
 ##--- 加载数据 ---##
 # x: (n, freq_bins, time_frames, 3) extract from audio by cfp_process
 # y: (n, freq_bins+1, time_frames) from ground-truth
 train_x, train_y, train_num = load_data(
-    data_file='./',
-    track_list=train_ids,
+    track_list=training_files,
     seg_len=SEG_LEN
 )
 valid_x, valid_y = load_data_for_test(
-    data_file='./',
-    track_list=val_ids,
+    track_list=validation_files,
     seg_len=SEG_LEN
 )
 
@@ -99,7 +96,11 @@ print('\nTaining...')
 print('params={}'.format(model.count_params()))
 
 epoch, iteration = 0, 0
-best_OA, best_epoch, best_RPA, best_loss = 0, 0, 0, 10000
+best_OA, best_OA_SOTA, best_epoch, best_RPA, best_loss = 0, 0, 0, 0, 10000
+best_RPA_eval_arr = np.array([0, 0, 0, 0, 0], dtype='float64')
+best_loss_eval_arr = np.array([0, 0, 0, 0, 0], dtype='float64')
+best_OA_eval_arr = np.array([0, 0, 0, 0, 0], dtype='float64')
+best_OA_eval_arr_sota = np.array([0, 0, 0, 0, 0], dtype='float64')
 mean_loss = 0
 time_start = time.time()
 while epoch < EPOCHS:
@@ -121,39 +122,58 @@ while epoch < EPOCHS:
         print('Epoch {}/{} - {:.1f}s - loss {:.4f}'.format(epoch, EPOCHS, traintime, mean_loss))
         # valid results
         avg_eval_arr = evaluate(model, valid_x, valid_y, BATCH_SIZE)
+        avg_eval_arr_sota = evaluate(model, valid_x, valid_y, BATCH_SIZE, cent_tolerance=50)
         
         # save best OA model
         if avg_eval_arr[-1] > best_OA:
             best_OA = avg_eval_arr[-1]
             best_epoch = epoch
+            best_OA_eval_arr = avg_eval_arr
             model.save_weights(
                 filepath=checkpoint_best_OA,
                 overwrite=True,
                 save_format='tf'
             )
             print('Saved to ' + checkpoint_best_OA)
+            
+        # save best OA model
+        if avg_eval_arr_sota[-1] > best_OA_SOTA:
+            best_OA_SOTA = avg_eval_arr_sota[-1]
+            best_OA_eval_arr_sota = avg_eval_arr_sota
 
         # save best loss model
         if mean_loss <= best_loss:
             best_loss = mean_loss
-            model.save_weights(
-                filepath=checkpoint_best_loss,
-                overwrite=True,
-                save_format='tf'
-            )
-            print('Saved to ' + checkpoint_best_loss)
+            best_loss_eval_arr = avg_eval_arr
+            print('Best loss detected!')
 
         # save best RPA model
         if avg_eval_arr[2] > best_RPA:
             best_RPA = avg_eval_arr[2]
-            model.save_weights(
-                filepath=checkpoint_best_RPA,
-                overwrite=True,
-                save_format='tf'
-            )
-            print('Saved to ' + checkpoint_best_RPA)
+            best_RPA_eval_arr = avg_eval_arr
+            print('Best RPA detected!')
+        
+        print('ACTUAL VALIDATION:')
         print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}% BestOA {:.2f}%'.format(
             avg_eval_arr[0], avg_eval_arr[1], avg_eval_arr[2], avg_eval_arr[3], avg_eval_arr[4], best_OA))
+        print('ACTUAL VALIDATION 50 tolerance:')
+        print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}% BestOA {:.2f}%'.format(
+            avg_eval_arr_sota[0], avg_eval_arr_sota[1], avg_eval_arr_sota[2], avg_eval_arr_sota[3], avg_eval_arr_sota[4], best_OA_SOTA))
+        
+        print('\nACTUAL BEST RPA:')
+        print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+            best_RPA_eval_arr[0], best_RPA_eval_arr[1], best_RPA_eval_arr[2], best_RPA_eval_arr[3], best_RPA_eval_arr[4]))
+        
+        print('\nACTUAL BEST OA:')
+        print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+            best_OA_eval_arr[0], best_OA_eval_arr[1], best_OA_eval_arr[2], best_OA_eval_arr[3], best_OA_eval_arr[4]))
+        print('\nACTUAL BEST OA 50 tolerance:')
+        print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+            best_OA_eval_arr_sota[0], best_OA_eval_arr_sota[1], best_OA_eval_arr_sota[2], best_OA_eval_arr_sota[3], best_OA_eval_arr_sota[4]))
+        
+        print('\nACTUAL BEST LOSS:')
+        print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+            best_loss_eval_arr[0], best_loss_eval_arr[1], best_loss_eval_arr[2], best_loss_eval_arr[3], best_loss_eval_arr[4]))
         # early stopping
         if epoch - best_epoch >= PATIENCE:
             print('Early stopping with best OA {:.2f}%'.format(best_OA))
