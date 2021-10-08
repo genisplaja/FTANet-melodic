@@ -5,10 +5,23 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pickle
 
-with open('./to_plot/chertala.pkl', 'rb') as f:
-	our_file = pickle.load(f)
+with open('./file_lists/carnatic_synth_model.pkl', 'rb') as f:
+	synth = pickle.load(f)
+
+with open('./file_lists/hindustani_synth_model.pkl', 'rb') as f:
+	hindustani_synth = pickle.load(f)
+
+with open('./file_lists/adc_synth_model.pkl', 'rb') as f:
+	adc_synth = pickle.load(f)
+
+with open('./file_lists/mirex05_synth_model.pkl', 'rb') as f:
+	mirex_synth = pickle.load(f)
+
+with open('./file_lists/medley_synth_model.pkl', 'rb') as f:
+	medley_synth = pickle.load(f)
 
 
+'''
 melodia_file = []
 with open('./to_plot/melodia_results.txt', 'r') as f:
 	melodia_file = np.genfromtxt(f, delimiter=',')
@@ -25,7 +38,6 @@ durrieu_list = []
 for i in durrieu_file:
 	durrieu_list.append(i[:-1])
 
-'''
 results_df = pd.DataFrame(our_results_OA, columns=['VR', 'VFA', 'RPA', 'RCA', 'OA'])
 plt.figure(figsize=[6, 7.5])
 plt.ylabel('Score (%)')
@@ -37,7 +49,6 @@ results_df.boxplot(grid=True, showfliers=False, showmeans=True, meanprops=
      "markersize":"7.5"}
     )
 plt.show()
-'''
 
 print(melodia_list[1])
 
@@ -63,14 +74,28 @@ print(mdf.head())
 # 3         1      A  0.687614
 # 4         1      A  0.094116
 
-ax = sns.boxplot(x="Score", y="value", hue="Model", data=mdf, showfliers=False, showmeans=True, 
+'''
+plt.figure(figsize=[15, 7])
+synth_df = pd.DataFrame(synth, columns=['VR', 'VFA', 'RPA', 'RCA', 'OA']).assign(Dataset='Carnatic SYNTH test set')
+hindustani_df = pd.DataFrame(hindustani_synth, columns=['VR', 'VFA', 'RPA', 'RCA', 'OA']).assign(Dataset='Hindustani SYNTH test set')
+adc_df = pd.DataFrame(adc_synth, columns=['VR', 'VFA', 'RPA', 'RCA', 'OA']).assign(Dataset='ADC2004 (Vocal)')
+mirex_df = pd.DataFrame(mirex_synth, columns=['VR', 'VFA', 'RPA', 'RCA', 'OA']).assign(Dataset='MIREX05 (Vocal)')
+medley_df = pd.DataFrame(medley_synth, columns=['VR', 'VFA', 'RPA', 'RCA', 'OA']).assign(Dataset='MedleyDB (Vocal)')
+
+cdf = pd.concat([synth_df, hindustani_df, mirex_df, medley_df, adc_df])    
+mdf = pd.melt(cdf, id_vars=['Dataset'], var_name=['Score'])
+print(mdf.head())
+
+ax = sns.boxplot(x="Score", y="value", hue="Dataset", data=mdf, showfliers=False, showmeans=True, 
 	meanprops= {"marker":"o",
      "markerfacecolor":"white", 
      "markeredgecolor":"black",
-     "markersize":"7"})
+     "markersize":"5"})
+ 
 
 lines = ax.get_lines()
 categories = ax.get_xticks()
+sns.despine(trim=True, left=True)
 
 plt.grid()  #just add this
 plt.xlabel('Melody metrics') 

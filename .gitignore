@@ -1,6 +1,21 @@
 # Project folders
 .idea/
 
+# Data folders
+eval_datasets/
+file_lists/
+checkpoints/
+to_plot/
+
+# Outdated models
+model/new/
+model/old/
+model/more_resolution/
+model/baseline/
+model/synth_data_baseline/
+model/synth_data/
+model/synth_more_data/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

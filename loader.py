@@ -1,18 +1,9 @@
-import os
 import csv
-
-import scipy.signal
 from tqdm import tqdm
-import pickle
-import librosa
 import mir_eval
 import numpy as np
 import pandas as pd
-from scipy import signal
 from cfp import cfp_process
-
-
-dataset_path = '/mnt/sda1/genis/carnatic_melody_dataset/resources/Saraga-Synth-Dataset/'
 
 
 def get_CenFreq(StartFreq=80, StopFreq=1000, NumPerOct=48):
@@ -106,24 +97,21 @@ def load_data(track_list, seg_len=430):
         print('feature', np.shape(feature))
 
         ## Load f0 frequency
-        #pitch = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
-        ref_arr = csv2ref(wav_file.replace('.wav', '.csv').replace('audio', 'annotations/melody'))
+        ref_arr = csv2ref(wav_file.replace('_MIX_melsynth.wav', '.csv').replace('audio_mix', 'annotation_melody'))
+        #if 'medley' in wav_file:
+        #    ref_arr = csv2ref(wav_file.replace('.wav', 'REF.csv'))
+        #else:
+        #    if 'train' in wav_file:
+        #        ref_arr = txt2ref_tabs(wav_file.replace('.wav', 'REF.txt'))
+        #    else:
+        #        ref_arr = txt2ref_spaces(wav_file.replace('.wav', 'REF.txt'))
         _, pitch_res = resample_melody(ref_arr, np.shape(feature)[-1])
         print('pitch', np.shape(pitch_res))
-
-        ## Transfer to mapp, ping
-        #CenFreq = get_CenFreq(StartFreq=31, StopFreq=720, NumPerOct=120)
-        #CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)  # (321) #参数是特征提取时就固定的
+        
         mapping = seq2map(pitch_res, CenFreq)  # (321, T)
-        # print('CenFreq', np.shape(CenFreq), 'mapping', np.shape(mapping))
         
         ## Crop to segments
         xlist, ylist, num = batchize(feature, mapping, xlist, ylist, size=seg_len)
-
-    #dataset = (xlist, ylist)
-    #with open(data_file, 'wb') as f:
-    #    pickle.dump(dataset, f)
-    #    print("Saved {} segments to {}".format(len(xlist), data_file))
     
     return xlist, ylist, len(ylist)
 
@@ -140,8 +128,14 @@ def load_data_for_test(track_list, seg_len=430):
         print('feature', np.shape(feature))
 
         ## Load f0 frequency
-        # pitch = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
-        ref_arr = csv2ref(wav_file.replace('.wav', '.csv').replace('audio', 'annotations/melody'))
+        ref_arr = csv2ref(wav_file.replace('_MIX_melsynth.wav', '.csv').replace('audio_mix', 'annotation_melody'))
+        #if 'medley' in wav_file:
+        #    ref_arr = csv2ref(wav_file.replace('.wav', 'REF.csv'))
+        #else:
+        #    if 'train' in wav_file:
+        #        ref_arr = txt2ref_tabs(wav_file.replace('.wav', 'REF.txt'))
+        #    else:
+        #        ref_arr = txt2ref_spaces(wav_file.replace('.wav', 'REF.txt'))
         times, pitch = resample_melody(ref_arr, np.shape(feature)[-1])
         ref_arr_res = np.concatenate((times[:, None], pitch[:, None]), axis=1)
         print('pitch', np.shape(ref_arr_res))
@@ -149,11 +143,6 @@ def load_data_for_test(track_list, seg_len=430):
         data = batchize_test(feature, size=seg_len)
         xlist.append(data)
         ylist.append(ref_arr_res[:, :])
-
-    #dataset = (xlist, ylist)
-    #with open(data_file, 'wb') as f:
-    #    pickle.dump(dataset, f)
-    #    print("Saved {} segments to {}".format(len(xlist), data_file))
     
     return xlist, ylist
 
@@ -199,6 +188,38 @@ def txt_to_pitch(ypath):
             pitch.append(float(row[1].replace(' ', '')))
         
         return np.array(pitch)
+
+
+def txt2ref_spaces(ypath):
+    times = []
+    pitch = []
+    with open(ypath, 'r') as fhandle:
+        reader = csv.reader(fhandle, delimiter=' ')
+        for row in reader:
+            times.append(float(row[0]))
+            pitch.append(float(row[-1]))
+            
+        times = np.array(times)
+        pitch = np.array(pitch)
+        ref_arr = np.concatenate((times[:, None], pitch[:, None]), axis=1)
+        
+        return ref_arr
+
+
+def txt2ref_tabs(ypath):
+    times = []
+    pitch = []
+    with open(ypath, 'r') as fhandle:
+        reader = csv.reader(fhandle, delimiter='\t')
+        for row in reader:
+            times.append(float(row[0]))
+            pitch.append(float(row[1]))
+        
+        times = np.array(times)
+        pitch = np.array(pitch)
+        ref_arr = np.concatenate((times[:, None], pitch[:, None]), axis=1)
+        
+        return ref_arr
     
     
 def csv2ref(ypath):

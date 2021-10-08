@@ -1,15 +1,6 @@
-import re
-import numpy as np
-import pandas as pd
-import numpy
 import glob
-from tqdm import tqdm
 import random
 import pickle
-from numpy.core.fromnumeric import std
-import mir_eval
-from cfp import cfp_process
-from tensorflow import keras
 
 from constant import *
 from loader import *
@@ -75,7 +66,7 @@ def iseg(data):
     return new_data
 
 
-def evaluate(model, x_list, y_list, batch_size, cent_tolerance=25, filename=None):
+def evaluate(model, x_list, y_list, batch_size, cent_tolerance=50, filename=None):
     list_to_save = []
     avg_eval_arr = np.array([0, 0, 0, 0, 0], dtype='float64')
     for i in range(len(x_list)):
@@ -110,20 +101,18 @@ def evaluate(model, x_list, y_list, batch_size, cent_tolerance=25, filename=None
         time_arr = y[:, 0]
         
         # trnasform to f0ref
-        #CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)
-        CenFreq = get_CenFreq(StartFreq=100, StopFreq=600, NumPerOct=124)
+        CenFreq = get_CenFreq(StartFreq=31, StopFreq=1250, NumPerOct=60)
+        #CenFreq = get_CenFreq(StartFreq=100, StopFreq=600, NumPerOct=124)
         est_arr = est(preds, CenFreq, time_arr)
-
-        if filename:
-            with open('/mnt/sda1/genis/FTANet-melodic/file_lists/' + filename, 'w') as f:
-                for i, j in zip(est_arr[:,0], est_arr[:,1]):
-                    f.write(str(i) + ',' + str(j) + '\n')
-            print(filename, 'Saved correctly')
 
         # evaluates
         eval_arr = melody_eval(ref_arr, est_arr, cent_tolerance=cent_tolerance)
         list_to_save.append(eval_arr)
         avg_eval_arr += eval_arr
+
+    if filename:
+        with open('/mnt/sda1/genis/FTANet-melodic/file_lists/' + filename, 'wb') as f:
+            pickle.dump(file=f, obj=list_to_save)
     
     avg_eval_arr /= len(x_list)
     # VR, VFA, RPA, RCA, OA
@@ -197,62 +186,23 @@ def get_pitch_track(filename):
         estimation[:, 0],
         estimation[:, 1]
     )
-
-
-def test_model_on_medley(file_list):
-    print('Loading model...')
-    model_baseline = create_model(input_shape=IN_SHAPE)
-    model_baseline.load_weights('/mnt/sda1/genis/FTANet-melodic/model/ftanet.h5')
+    
+    
+def test_model(file_list, save_name=''):
+    print('Loading synth Carnatic model...')
     model_OA = create_model(input_shape=IN_SHAPE)
     model_OA.load_weights(
-        filepath='/mnt/sda1/genis/FTANet-melodic/model/new/best_OA'
+        filepath='/home/genis/FTANet-melodic/model/synth_more_data_baseline/OA'
     ).expect_partial()
-    print('Model loaded!')
-    
-    xlist = []
-    ylist = []
-    
-    for wav_file in tqdm(file_list):
-        ## Load cfp features (3, 320, T)
-        # feature = np.load(data_folder + 'cfp/' + fname + '.npy')
-        feature, _, time_arr = cfp_process(wav_file, sr=8000, hop=80)
-        print('feature', np.shape(feature))
-        
-        ## Load f0 frequency
-        # pitch = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
-        ref_arr = select_vocal_track(
-            wav_file.replace('.wav', '.csv').replace('audio', 'annotations'),
-            wav_file.replace('.wav', '.lab').replace('audio', 'annotations')
-        )
-        #ref_arr = csv2ref(wav_file.replace('.wav', '.csv').replace('audio', 'annotations/melody'))
-        times, pitch = resample_melody(ref_arr, np.shape(feature)[-1])
-        ref_arr_res = np.concatenate((times[:, None], pitch[:, None]), axis=1)
-        print('pitch', np.shape(ref_arr_res))
-        
-        data = batchize_test(feature, size=128)
-        xlist.append(data)
-        ylist.append(ref_arr_res[:, :])
-    
-    scores_bl = evaluate(model_OA, xlist, ylist, batch_size=16, filename='OA_test_NOC.pkl')
-    scores = evaluate(model_baseline, xlist, ylist, batch_size=16, filename='baseline_test_NOC.pkl')
-    print('BASELINE: VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
-        scores_bl[0], scores_bl[1], scores_bl[2], scores_bl[3], scores_bl[4]))
-    print('OWN: VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
-        scores[0], scores[1], scores[2], scores[3], scores[4]))
-    
-    
-def test_model(file_list):
-    print('Loading model...')
-    
-    model_OA = create_model(input_shape=IN_SHAPE)
-    model_OA.load_weights(
-        filepath='/mnt/sda1/genis/FTANet-melodic/model/more_resolution/best_OA'
-    ).expect_partial()
-    print('Model loaded!')
 
-    model_baseline = create_model(input_shape=IN_SHAPE)
-    model_baseline.load_weights(
-        filepath='/mnt/sda1/genis/FTANet-melodic/model/baseline/OA'
+    model_non_synth = create_model(input_shape=IN_SHAPE)
+    model_non_synth.load_weights(
+        filepath='/home/genis/FTANet-melodic/model/more_resolution/best_OA'
+    ).expect_partial()
+
+    model_western = create_model(input_shape=IN_SHAPE)
+    model_western.load_weights(
+        filepath='/home/genis/FTANet-melodic/model/western/OA'
     ).expect_partial()
 
     xlist = []
@@ -270,18 +220,129 @@ def test_model(file_list):
         times, pitch = resample_melody(ref_arr, np.shape(feature)[-1])
         ref_arr_res = np.concatenate((times[:, None], pitch[:, None]), axis=1)
         print('pitch', np.shape(ref_arr_res))
-    
+
         data = batchize_test(feature, size=128)
         xlist.append(data)
         ylist.append(ref_arr_res[:, :])
 
     #scores_bl = evaluate(model_baseline, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None)
-    scores = evaluate(model_OA, xlist, ylist, batch_size=16, cent_tolerance=25, filename='experiment_2.txt')
-    #print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
-    #    scores_bl[0], scores_bl[1], scores_bl[2], scores_bl[3], scores_bl[4]))
-    print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
-        scores[0], scores[1], scores[2], scores[3], scores[4]))
+    scores_synth = evaluate(
+        model_OA, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None)
+    scores_non_synth = evaluate(
+        model_non_synth, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None)
+    scores_western = evaluate(
+        model_western, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None)
+
+    print('CARNATIC MODEL\nVR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+        scores_synth[0], scores_synth[1], scores_synth[2], scores_synth[3], scores_synth[4]))
     
+    print('NON-SYNTH MODEL\nVR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+         scores_non_synth[0], scores_non_synth[1], scores_non_synth[2], scores_non_synth[3], scores_non_synth[4]))
+
+    print('WESTERN MODEL\nVR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+         scores_western[0], scores_western[1], scores_western[2], scores_western[3], scores_western[4]))
+
+    return scores_synth
+
+
+def test_model_on_MIREX05(file_list, artist_name='hola'):
+    print('Loading synth Carnatic model...')
+    model_OA = create_model(input_shape=IN_SHAPE)
+    model_OA.load_weights(
+        filepath='/home/genis/FTANet-melodic/model/western/OA',
+    ).expect_partial()
+
+    # print('Loading baseline Western music model...')
+    # model_baseline = create_model(input_shape=IN_SHAPE)
+    # model_baseline.load_weights('/mnt/sda1/genis/FTANet-melodic/model/ftanet.h5')
+    
+    print('Models loaded!')
+    
+    xlist = []
+    ylist = []
+    
+    for wav_file in tqdm(file_list):
+        ## Load cfp features (3, 320, T)
+        # feature = np.load(data_folder + 'cfp/' + fname + '.npy')
+        feature, _, time_arr = cfp_process(wav_file, sr=8000, hop=80)
+        print('feature', np.shape(feature))
+        
+        ## Load f0 frequency
+        # pitch = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
+        ref_arr = txt2ref_tabs(wav_file.replace('.wav', 'REF.txt'))
+        times, pitch = resample_melody(ref_arr, np.shape(feature)[-1])
+        ref_arr_res = np.concatenate((times[:, None], pitch[:, None]), axis=1)
+        print('pitch', np.shape(ref_arr_res))
+        
+        data = batchize_test(feature, size=128)
+        xlist.append(data)
+        ylist.append(ref_arr_res[:, :])
+
+    # scores_bl = evaluate(model_baseline, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None)
+    scores_synth = evaluate(
+        model_OA, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None)
+    # scores_baseline = evaluate(
+    #    model_baseline, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None
+    # )
+    print('CARNATIC MODEL\nVR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+        scores_synth[0], scores_synth[1], scores_synth[2], scores_synth[3], scores_synth[4]))
+    # print('WESTERN MUSIC MODEL\nVR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+    #    scores_baseline[0], scores_baseline[1], scores_baseline[2], scores_baseline[3], scores_baseline[4]))
+    
+    return scores_synth
+
+
+def test_model_on_ADC(file_list, artist_name='hola'):
+    print('Loading synth Carnatic model...')
+    model_OA = create_model(input_shape=IN_SHAPE)
+    model_OA.load_weights(
+        filepath='/home/genis/FTANet-melodic/model/western/OA',
+    ).expect_partial()
+    
+    # print('Loading baseline Western music model...')
+    # model_baseline = create_model(input_shape=IN_SHAPE)
+    # model_baseline.load_weights('/mnt/sda1/genis/FTANet-melodic/model/ftanet.h5')
+    
+    print('Models loaded!')
+    
+    xlist = []
+    ylist = []
+    scores_synth = []
+    
+    arranged_filelist = [x for x in file_list if 'daisy' in x] + \
+                        [x for x in file_list if 'opera' in x] + \
+                        [x for x in file_list if 'pop' in x]
+    
+    for wav_file in tqdm(arranged_filelist):
+        ## Load cfp features (3, 320, T)
+        # feature = np.load(data_folder + 'cfp/' + fname + '.npy')
+        feature, _, time_arr = cfp_process(wav_file, sr=8000, hop=80)
+        print('feature', np.shape(feature))
+        
+        ## Load f0 frequency
+        # pitch = np.loadtxt(data_folder + 'f0ref/' + fname + '.txt')
+        ref_arr = txt2ref_spaces(wav_file.replace('.wav', 'REF.txt'))
+        times, pitch = resample_melody(ref_arr, np.shape(feature)[-1])
+        ref_arr_res = np.concatenate((times[:, None], pitch[:, None]), axis=1)
+        print('pitch', np.shape(ref_arr_res))
+        
+        data = batchize_test(feature, size=128)
+        xlist.append(data)
+        ylist.append(ref_arr_res[:, :])
+        
+        # scores_bl = evaluate(model_baseline, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None)
+        scores_synth = evaluate(
+            model_OA, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None)
+        # scores_baseline = evaluate(
+        #    model_baseline, xlist, ylist, batch_size=16, cent_tolerance=50, filename=None
+        # )
+        print('CARNATIC MODEL\nVR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+            scores_synth[0], scores_synth[1], scores_synth[2], scores_synth[3], scores_synth[4]))
+        # print('WESTERN MUSIC MODEL\nVR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
+        #    scores_baseline[0], scores_baseline[1], scores_baseline[2], scores_baseline[3], scores_baseline[4]))
+    
+    return scores_synth
+
 
 def save_pitch_track_to_dataset(filename, est_time, est_freq):
     # Write txt annotation to file
@@ -371,9 +432,9 @@ def select_vocal_track(ypath, lpath):
     
     gt = np.concatenate((gt0, z), axis=1)
     return gt
+ 
 
-
-def get_files_to_test(artist, artists_to_track_mapping):
+def get_files_to_test(fp, artist, artists_to_track_mapping):
     # Get track to train
     tracks_to_test = artists_to_track_mapping[artist]
 
@@ -385,24 +446,50 @@ def get_files_to_test(artist, artists_to_track_mapping):
     return files_to_test
 
 
+# Run python3 evaluation.py to execute the evaluation code
 if __name__ == '__main__':
-    fp = '/mnt/sda1/genis/carnatic_melody_dataset/resources/Saraga-Synth-Dataset/'
-    fp_medley = '/mnt/sda1/genis/carnatic_melody_dataset/resources/medley_aux/'
-    dataset_filelist = glob.glob(fp + 'audio/*.wav')
-    with open(fp + 'artists_to_track_mapping.pkl', 'rb') as map_file:
+    fp_synth = '/home/genis/Saraga-Carnatic-Melody-Synth/'
+    fp_hindustani = '/home/genis/Hindustani-Synth-Dataset/'
+
+    dataset_filelist_synth = glob.glob(fp_synth + 'audio/*.wav')
+    with open(fp_synth + 'artists_to_track_mapping.pkl', 'rb') as map_file:
         artists_to_track_mapping = pickle.load(map_file)
     
-    mahati_test = get_files_to_test('Mahati', artists_to_track_mapping)
-    sumithra_test = get_files_to_test('Sumithra Vasudev', artists_to_track_mapping)
-    #modhumudi_test = get_files_to_test('Modhumudi Sudhakar', artists_to_track_mapping)
-    test_files = get_files_to_test('Cherthala Ranganatha Sharma', artists_to_track_mapping)
-
-    #medley_tracks = glob.glob(fp_medley + 'audio/*.wav')
-
-    #test_model_on_medley(medley_tracks)
-    test_model([mahati_test[0]])
-    evaluate_melodia([mahati_test[0]])
+    mahati_test = get_files_to_test(fp_synth, 'Mahati', artists_to_track_mapping)
+    sumithra_test = get_files_to_test(fp_synth, 'Sumithra Vasudev', artists_to_track_mapping)
+    modhumudi_test = get_files_to_test(fp_synth, 'Modhumudi Sudhakar', artists_to_track_mapping)
+    chertala_test = get_files_to_test(fp_synth, 'Cherthala Ranganatha Sharma', artists_to_track_mapping)
+    test_carnatic_list = [mahati_test, sumithra_test, modhumudi_test, chertala_test]
+    testing_carnatic = []
+    for i in test_carnatic_list:
+        testing_carnatic += random.sample(i, 50)
+        
+    # Store testing set of Carnatic-Synth
+    with open('./file_lists/Carnatic-Synth-test.txt') as f:
+        for i in testing_carnatic:
+            f.write(i + '\n')
+        f.close()
+    # Evaluate Carnatic-Synth set
+    carnatic_synth_scores = test_model(testing_carnatic)
     
-    #get_pitch_track(
-    #    '/mnt/sda1/genis/carnatic_melody_synthesis/resources/saraga_subset/Gopi Gopala Bala.mp3.mp3'
-    #)
+    # Parse hindustani testing set
+    hindustani_testing_files = glob.glob(fp_hindustani + 'audio/*.wav')
+    hindustani_testing_recordings = ['Deepki', 'Raag_Jog', 'Raag_Dhani', 'Todi', 'Malkauns', 'Piloo']
+    testing_hindustani = []
+    for i in hindustani_testing_recordings:
+        testing_hindustani += [x for x in hindustani_testing_files if i in x]
+
+    # Evaluate Hindustani-Synth set
+    hindustani_synth = test_model(testing_hindustani)
+
+    # Evaluate model on ADC2004
+    adc_filelist = glob.glob(
+        '/home/genis/FTANet-melodic/eval_datasets/ADC2004/*.wav'
+    )
+    scores_adc = test_model_on_ADC(adc_filelist)
+
+    # Evaluate model on MIREX05
+    mirex05_filelist = glob.glob(
+        '/home/genis/FTANet-melodic/eval_datasets/MIREX05/*.wav'
+    )
+    scores_mirex05 = test_model_on_MIREX05(mirex05_filelist)

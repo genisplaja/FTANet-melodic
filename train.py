@@ -1,12 +1,8 @@
 import glob
 import os
-import csv
 import random
 import pickle
-import argparse
 import time
-from tqdm import tqdm
-import warnings
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import backend as K
@@ -17,21 +13,20 @@ from tensorflow.keras.metrics import categorical_accuracy
 
 from constant import *
 from generator import create_data_generator
-from loader import load_data, load_data_for_test  # TODO
+from loader import load_data, load_data_for_test
 from evaluator import evaluate
 
 from network.ftanet import create_model
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 # 指定输出的模型的路径
 #parser = argparse.ArgumentParser()
 #parser.add_argument("model_file", type=str, help="model file")
 #checkpoint_model_file = parser.parse_args().model_file
-fp = '/mnt/sda1/genis/carnatic_melody_dataset/resources/Saraga-Synth-Dataset/'
-checkpoint_best_OA = '/mnt/sda1/genis/FTANet-melodic/model/baseline/OA'
 
-list_folder = '/mnt/sda1/genis/FTANet-melodic/file_lists'
+fp = '/home/genis/carnatic_melody_synthesis/resources/Saraga-Carnatic-Melody-Synth/'
+checkpoint_best_OA = '/home/genis/FTANet-melodic/model/synth_more_data_baseline/OA'
 
 #log_file_name = 'log/log-train-{}.txt'.format(time.strftime("%Y%m%d-%H%M%S"))
 #log_file_name = checkpoint_model_file.replace('model/', 'log/').replace('.h5', '.log')
@@ -42,35 +37,37 @@ with open(fp + 'artists_to_track_mapping.pkl', 'rb') as map_file:
     artists_to_track_mapping = pickle.load(map_file)
 
 artists_to_train = [
-    'Angarai V K Rajasimhan',
-    'KP Nandini',
-    'Vidya Subramanian',
-    'Kuldeep Pai',
-    'Salem Gayatri Venkatesan',
-    'Vasundara Rajagopal'
+    'Angarai V K Rajasimhan',  # Male
+    'KP Nandini',  # Female
+    'Vidya Subramanian',  # Female
+    'Kuldeep Pai',  # Male
+    'Salem Gayatri Venkatesan',  # Female
+    'Vasundara Rajagopal',  # Female
+    'Modhumudi Sudhakar',  # Male
+    'Srividya Janakiraman'  # Female
 ]
 
-# Get track to train
+# Get tracks to train
 tracks_to_train = []
 for artist in artists_to_train:
-    tracks_to_train = tracks_to_train + artists_to_track_mapping[artist]
-    
-print(len(tracks_to_train))
-    
-# Get filenames to train
-files_to_train = []
-for track in tracks_to_train:
-    files_to_train.append(fp + 'audio/' + track + '.wav')
-    
-training_files = random.sample(files_to_train, 700)
-validation_files = random.sample([x for x in files_to_train if x not in training_files], 25)
+    tracks_to_train.append(artists_to_track_mapping[artist])
 
-print('Files to train: ', len(training_files))
-print('Files to validate: ', len(validation_files))
+# Get filenames to train
+training_files = []
+validation_files = []
+for artist in tracks_to_train:
+    files_for_artists = random.sample(artist, 85)
+    files_to_validate = random.sample([x for x in artist if x not in files_for_artists], 3)
+    complete_files_for_artists = [(fp + 'audio/' + track + '.wav') for track in files_for_artists]
+    complete_files_to_validate = [(fp + 'audio/' + track + '.wav') for track in files_to_validate]
+    training_files = training_files + complete_files_for_artists
+    validation_files = validation_files + complete_files_to_validate
 
 ##--- 加载数据 ---##
 # x: (n, freq_bins, time_frames, 3) extract from audio by cfp_process
 # y: (n, freq_bins+1, time_frames) from ground-truth
+print('Files to train: ', len(training_files))
+print('Files to validate: ', len(validation_files))
 train_x, train_y, train_num = load_data(
     track_list=training_files,
     seg_len=SEG_LEN
@@ -96,8 +93,7 @@ print('\nTaining...')
 print('params={}'.format(model.count_params()))
 
 epoch, iteration = 0, 0
-best_OA, best_OA_SOTA, best_epoch, best_RPA, best_loss = 0, 0, 0, 0, 10000
-best_RPA_eval_arr = np.array([0, 0, 0, 0, 0], dtype='float64')
+best_OA, best_OA_SOTA, best_epoch, best_loss = 0, 0, 0, 10000
 best_loss_eval_arr = np.array([0, 0, 0, 0, 0], dtype='float64')
 best_OA_eval_arr = np.array([0, 0, 0, 0, 0], dtype='float64')
 best_OA_eval_arr_sota = np.array([0, 0, 0, 0, 0], dtype='float64')
@@ -121,21 +117,21 @@ while epoch < EPOCHS:
         print('', end='\r')
         print('Epoch {}/{} - {:.1f}s - loss {:.4f}'.format(epoch, EPOCHS, traintime, mean_loss))
         # valid results
-        avg_eval_arr = evaluate(model, valid_x, valid_y, BATCH_SIZE)
+        avg_eval_arr = evaluate(model, valid_x, valid_y, BATCH_SIZE, cent_tolerance=25)
         avg_eval_arr_sota = evaluate(model, valid_x, valid_y, BATCH_SIZE, cent_tolerance=50)
         
         # save best OA model
-        if avg_eval_arr[-1] > best_OA:
-            best_OA = avg_eval_arr[-1]
+        if avg_eval_arr_sota[-1] > best_OA:
+            best_OA = avg_eval_arr_sota[-1]
             best_epoch = epoch
-            best_OA_eval_arr = avg_eval_arr
+            best_OA_eval_arr = avg_eval_arr_sota
             model.save_weights(
                 filepath=checkpoint_best_OA,
                 overwrite=True,
                 save_format='tf'
             )
             print('Saved to ' + checkpoint_best_OA)
-            
+        
         # save best OA model
         if avg_eval_arr_sota[-1] > best_OA_SOTA:
             best_OA_SOTA = avg_eval_arr_sota[-1]
@@ -147,22 +143,12 @@ while epoch < EPOCHS:
             best_loss_eval_arr = avg_eval_arr
             print('Best loss detected!')
 
-        # save best RPA model
-        if avg_eval_arr[2] > best_RPA:
-            best_RPA = avg_eval_arr[2]
-            best_RPA_eval_arr = avg_eval_arr
-            print('Best RPA detected!')
-        
         print('ACTUAL VALIDATION:')
         print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}% BestOA {:.2f}%'.format(
             avg_eval_arr[0], avg_eval_arr[1], avg_eval_arr[2], avg_eval_arr[3], avg_eval_arr[4], best_OA))
         print('ACTUAL VALIDATION 50 tolerance:')
         print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}% BestOA {:.2f}%'.format(
             avg_eval_arr_sota[0], avg_eval_arr_sota[1], avg_eval_arr_sota[2], avg_eval_arr_sota[3], avg_eval_arr_sota[4], best_OA_SOTA))
-        
-        print('\nACTUAL BEST RPA:')
-        print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
-            best_RPA_eval_arr[0], best_RPA_eval_arr[1], best_RPA_eval_arr[2], best_RPA_eval_arr[3], best_RPA_eval_arr[4]))
         
         print('\nACTUAL BEST OA:')
         print('VR {:.2f}% VFA {:.2f}% RPA {:.2f}% RCA {:.2f}% OA {:.2f}%'.format(
